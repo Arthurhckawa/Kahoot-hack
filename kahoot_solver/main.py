@@ -11,7 +11,7 @@ load_dotenv(Path(__file__).parent / ".env")
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic")
 LLM_MODEL = os.environ.get("LLM_MODEL", "claude-haiku-4-5-20251001")
-SCAN_INTERVAL = float(os.environ.get("SCAN_INTERVAL", "0.4"))
+SCAN_INTERVAL = float(os.environ.get("SCAN_INTERVAL", "0.2"))
 
 
 class SolverWorker(threading.Thread):
@@ -70,7 +70,7 @@ def capture_loop(worker, overlay, find_tiles, ScreenGrabber, cv2):
         while True:
             frame = grabber.grab()
             tiles = find_tiles(frame)
-            if len(tiles) >= 4:
+            if len(tiles) >= 2 and "red" in tiles:
                 bottom = max(b[3] for b in tiles.values())
                 top = max(0, min(b[1] for b in tiles.values()) - 600)
                 left = max(0, min(b[0] for b in tiles.values()) - 40)

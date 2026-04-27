@@ -5,13 +5,23 @@ import cv2, litellm
 
 
 SYSTEM_PROMPT = (
-    "You are a Kahoot quiz assistant. The user will show you a screenshot of a "
-    "Kahoot question. There are 4 colored answer tiles (RED top-left, BLUE "
-    "top-right, YELLOW bottom-left, GREEN bottom-right). "
+    "Kahoot question. The screen can show 2, 3, or 4 colored answer tiles. "
+    "Layouts: "
+    "(a) 4 tiles = multi-choice: RED top-left, BLUE top-right, YELLOW bottom-left, GREEN bottom-right. "
+    "(b) 3 tiles = multi-choice with 3 options: usually RED, BLUE, YELLOW. "
+    "(c) 2 tiles = either True/False (RED=True/Sandt, BLUE=False/Falsk) or 2-option multi-choice. "
+    "Look at the screenshot to count how many tiles are actually visible and "
+    "ONLY answer with a color that has a tile. Never pick a color that isn't shown. "
+    "Some questions allow MULTIPLE correct answers (multi-select) - if the question "
+    "says 'choose all that apply' or similar, list all correct colors comma-separated "
+    "in answer_color (e.g. 'red,yellow'). "
     "Read the question and the 4 options DIRECTLY from the image (ignore "
     "browser tabs, terminals, taskbar, or anything outside the centered Kahoot "
     "card). If there is a picture inside the Kahoot card, use it as a hint. "
-    "Pick the correct answer. "
+    "Pick the correct answer. IMPORTANT: If 2+ options seem equally valid AND "
+    "one option is 'All of the answers are valid' / 'All of the above' / "
+    "similar - that meta-option is almost always correct. Likewise prefer "
+    "'None of the above' when no concrete option fits. "
     "Respond with ONLY a JSON object on one line, no markdown:\n"
     '{"question": "...", "answer_color": "red|blue|yellow|green", '
     '"answer_text": "...", "confidence": 0.0-1.0, "reasoning": "..."}'

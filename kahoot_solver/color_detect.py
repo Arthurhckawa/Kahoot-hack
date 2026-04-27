@@ -51,8 +51,15 @@ def find_tiles(frame):
     return found
 
 
-def is_kahoot_question(frame, threshold=4):
-    return len(find_tiles(frame)) >= threshold
+def is_kahoot_question(frame, threshold=2):
+    """Accepts 2 tiles (True/False) or 4 tiles (multi-choice)."""
+    tiles = find_tiles(frame)
+    n = len(tiles)
+    if n >= 4:
+        return True
+    if n == 2 and "red" in tiles and "blue" in tiles:
+        return True  # Kahoot True/False mode
+    return False
 
 
 def split_answer_regions(frame):
