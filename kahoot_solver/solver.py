@@ -1,68 +1,68 @@
-"""Send the parsed question + answers to Claude (or any Emergent-supported model)."""
+"""Vision-only Kahoot solver."""
 from __future__ import annotations
-
-import asyncio
-import json
-import re
-import uuid
-
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+import base64, json, re
+import cv2, litellm
 
 
 SYSTEM_PROMPT = (
-    "You are a Kahoot quiz assistant. You will be given a question and the four "
-    "answer options taken straight from a Kahoot screen via OCR. The OCR can be "
-    "imperfect - infer the most likely original text. "
-    "Respond with ONLY a JSON object on a single line, no markdown, no commentary:\n"
-    '{"answer_color": "red|blue|yellow|green", '
-    '"answer_text": "<the exact option text>", '
-    '"confidence": 0.0-1.0, '
-    '"reasoning": "<one short sentence>"}'
+    "You are a Kahoot quiz assistant. The user will show you a screenshot of a "
+    "Kahoot question. There are 4 colored answer tiles (RED top-left, BLUE "
+    "top-right, YELLOW bottom-left, GREEN bottom-right). "
+    "Read the question and the 4 options DIRECTLY from the image (ignore "
+    "browser tabs, terminals, taskbar, or anything outside the centered Kahoot "
+    "card). If there is a picture inside the Kahoot card, use it as a hint. "
+    "Pick the correct answer. "
+    "Respond with ONLY a JSON object on one line, no markdown:\n"
+    '{"question": "...", "answer_color": "red|blue|yellow|green", '
+    '"answer_text": "...", "confidence": 0.0-1.0, "reasoning": "..."}'
 )
 
 
+def _encode_image(image_np):
+    _, buf = cv2.imencode(".png", image_np)
+    return base64.b64encode(buf).decode("utf-8")
+
+
 class Solver:
-    def __init__(self, api_key: str, provider: str = "anthropic",
-                 model: str = "claude-sonnet-4-5-20250929"):
+    def __init__(self, api_key, provider="anthropic", model="claude-haiku-4-5-20251001"):
         if not api_key:
-            raise RuntimeError("EMERGENT_LLM_KEY is missing - set it in .env")
+            raise RuntimeError("EMERGENT_LLM_KEY missing")
         self.api_key = api_key
         self.provider = provider
         self.model = model
 
-    async def _ask_async(self, question: str, options: dict) -> dict:
-        chat = LlmChat(
+    def ask(self, image):
+        b64 = _encode_image(image)
+        content = [
+            {"type": "text", "text": "Read the Kahoot question and pick the correct answer."},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+        ]
+        response = litellm.completion(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": content},
+            ],
             api_key=self.api_key,
-            session_id=f"kahoot-{uuid.uuid4().hex[:8]}",
-            system_message=SYSTEM_PROMPT,
-        ).with_model(self.provider, self.model)
-
-        prompt = (
-            f"Question: {question}\n\n"
-            f"Options:\n"
-            f"- RED: {options.get('red', '')}\n"
-            f"- BLUE: {options.get('blue', '')}\n"
-            f"- YELLOW: {options.get('yellow', '')}\n"
-            f"- GREEN: {options.get('green', '')}\n\n"
-            "Pick the correct option."
+            api_base="https://integrations.emergentagent.com/llm",
+            custom_llm_provider="openai",
         )
-        reply = await chat.send_message(UserMessage(text=prompt))
-        return self._parse(reply)
-
-    def ask(self, question: str, options: dict) -> dict:
-        return asyncio.run(self._ask_async(question, options))
+        return self._parse(response.choices[0].message.content)
 
     @staticmethod
-    def _parse(reply: str) -> dict:
-        match = re.search(r"\{.*\}", reply, re.DOTALL)
-        if not match:
-            return {"answer_color": "unknown", "answer_text": reply.strip(),
-                    "confidence": 0.0, "reasoning": "could not parse"}
+    def _parse(reply):
+        m = re.search(r"\{.*\}", reply, re.DOTALL)
+        if not m:
+            return {"question": "", "answer_color": "unknown",
+                    "answer_text": reply.strip()[:120], "confidence": 0.0,
+                    "reasoning": "could not parse"}
         try:
-            data = json.loads(match.group(0))
+            data = json.loads(m.group(0))
         except json.JSONDecodeError:
-            return {"answer_color": "unknown", "answer_text": reply.strip(),
-                    "confidence": 0.0, "reasoning": "invalid json"}
+            return {"question": "", "answer_color": "unknown",
+                    "answer_text": reply.strip()[:120], "confidence": 0.0,
+                    "reasoning": "invalid json"}
+        data.setdefault("question", "")
         data.setdefault("answer_color", "unknown")
         data.setdefault("answer_text", "")
         data.setdefault("confidence", 0.0)

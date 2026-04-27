@@ -1,54 +1,34 @@
-"""Real-time Kahoot solver - entry point.
-
-Run:  python main.py
-"""
+"""Real-time Kahoot solver - vision only."""
 from __future__ import annotations
 
-import json
-import os
-import queue
-import threading
-import time
+import hashlib, json, os, queue, threading, time
 from pathlib import Path
-
 from dotenv import load_dotenv
-
-from capture import ScreenGrabber
-from color_detect import is_kahoot_question
-from ocr_engine import OCREngine
 from overlay import AnswerOverlay
-from pipeline import build_payload
-from solver import Solver
 
 
 load_dotenv(Path(__file__).parent / ".env")
-
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic")
-LLM_MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-4-5-20250929")
-OCR_LANGUAGES = [s.strip() for s in os.environ.get("OCR_LANGUAGES", "en,da").split(",") if s.strip()]
+LLM_MODEL = os.environ.get("LLM_MODEL", "claude-haiku-4-5-20251001")
 SCAN_INTERVAL = float(os.environ.get("SCAN_INTERVAL", "0.4"))
 
 
 class SolverWorker(threading.Thread):
-    """Pulls payloads from a queue, calls the LLM, pushes results to overlay."""
-
-    def __init__(self, solver: Solver, overlay: AnswerOverlay):
+    def __init__(self, solver, overlay):
         super().__init__(daemon=True)
         self.solver = solver
         self.overlay = overlay
-        self.in_q: "queue.Queue[dict]" = queue.Queue(maxsize=2)
+        self.in_q = queue.Queue(maxsize=2)
         self._stop = threading.Event()
-        self._last_signature = ""
+        self._last_hash = ""
 
-    def submit(self, payload: dict):
-        sig = (payload.get("question", "") + "|" +
-               "|".join(payload.get("options", {}).values())).strip()
-        if sig == self._last_signature or len(sig) < 8:
+    def submit(self, frame_hash, image):
+        if frame_hash == self._last_hash:
             return
-        self._last_signature = sig
+        self._last_hash = frame_hash
         try:
-            self.in_q.put_nowait(payload)
+            self.in_q.put_nowait(image)
         except queue.Full:
             pass
 
@@ -58,36 +38,46 @@ class SolverWorker(threading.Thread):
     def run(self):
         while not self._stop.is_set():
             try:
-                payload = self.in_q.get(timeout=0.3)
+                image = self.in_q.get(timeout=0.3)
             except queue.Empty:
                 continue
             t0 = time.time()
             try:
-                answer = self.solver.ask(payload["question"], payload["options"])
+                answer = self.solver.ask(image)
             except Exception as e:
-                answer = {"answer_color": "unknown", "answer_text": f"error: {e}",
-                          "confidence": 0.0, "reasoning": ""}
+                answer = {"question": "", "answer_color": "unknown",
+                          "answer_text": f"error: {e}", "confidence": 0.0,
+                          "reasoning": ""}
             answer["latency_s"] = round(time.time() - t0, 2)
             self.overlay.update(answer)
-
-            print(json.dumps(
-                {"language_detected": payload["language_detected"],
-                 "detected_text": payload["detected_text"],
-                 "elements": payload["elements"],
-                 "answer": answer},
-                ensure_ascii=False)[:1500])
+            print(json.dumps(answer, ensure_ascii=False)[:500])
 
 
-def capture_loop(worker: SolverWorker, ocr: OCREngine, overlay: AnswerOverlay):
+def hash_tiles(frame, tiles, cv2):
+    top = min(b[1] for b in tiles.values())
+    bottom = max(b[3] for b in tiles.values())
+    left = min(b[0] for b in tiles.values())
+    right = max(b[2] for b in tiles.values())
+    crop = frame[top:bottom, left:right]
+    small = cv2.resize(crop, (64, 32))
+    return hashlib.md5(small.tobytes()).hexdigest()
+
+
+def capture_loop(worker, overlay, find_tiles, ScreenGrabber, cv2):
     grabber = ScreenGrabber()
-    print("[capture] running - press Ctrl+C in terminal to quit")
+    print("[capture] running - press Ctrl+C to quit")
     try:
         while True:
             frame = grabber.grab()
-            if is_kahoot_question(frame):
-                payload = build_payload(frame, ocr)
-                if payload["question"]:
-                    worker.submit(payload)
+            tiles = find_tiles(frame)
+            if len(tiles) >= 4:
+                bottom = max(b[3] for b in tiles.values())
+                top = max(0, min(b[1] for b in tiles.values()) - 600)
+                left = max(0, min(b[0] for b in tiles.values()) - 40)
+                right = min(frame.shape[1], max(b[2] for b in tiles.values()) + 40)
+                crop = frame[top:bottom, left:right]
+                h = hash_tiles(frame, tiles, cv2)
+                worker.submit(h, crop)
             time.sleep(SCAN_INTERVAL)
     except KeyboardInterrupt:
         pass
@@ -97,23 +87,36 @@ def capture_loop(worker: SolverWorker, ocr: OCREngine, overlay: AnswerOverlay):
         overlay.stop()
 
 
-def main():
+def init_and_run(overlay):
     if not EMERGENT_LLM_KEY:
-        print("ERROR: EMERGENT_LLM_KEY missing. Copy .env.example -> .env and add your key.")
+        overlay.update_status("ERROR: EMERGENT_LLM_KEY missing in .env")
         return
 
-    print("[init] loading EasyOCR (this may take a minute the first time)...")
-    ocr = OCREngine(OCR_LANGUAGES, gpu=False)
+    overlay.start_phase("Loading OpenCV", 2)
+    import cv2
+    import numpy  # noqa
+    overlay.end_phase()
 
+    overlay.start_phase("Loading LiteLLM", 4, "Connecting to Claude...")
+    from solver import Solver
     solver = Solver(EMERGENT_LLM_KEY, LLM_PROVIDER, LLM_MODEL)
-    overlay = AnswerOverlay()
+    overlay.end_phase()
+
+    overlay.start_phase("Starting screen capture", 1, f"Model: {LLM_MODEL}")
+    from capture import ScreenGrabber
+    from color_detect import find_tiles
     worker = SolverWorker(solver, overlay)
     worker.start()
+    overlay.end_phase()
 
-    t = threading.Thread(target=capture_loop, args=(worker, ocr, overlay), daemon=True)
-    t.start()
+    overlay.set_ready()
+    capture_loop(worker, overlay, find_tiles, ScreenGrabber, cv2)
 
-    overlay.run()  # tk must run on the main thread
+
+def main():
+    overlay = AnswerOverlay()
+    threading.Thread(target=init_and_run, args=(overlay,), daemon=True).start()
+    overlay.run()
 
 
 if __name__ == "__main__":

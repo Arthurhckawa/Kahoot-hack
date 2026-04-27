@@ -1,13 +1,9 @@
-"""Pipeline helpers shared by main.py and tests.
-
-Kept separate from main.py so they can be imported in headless environments
-(no tkinter required).
-"""
+"""Pipeline helpers shared by main.py and tests."""
 from __future__ import annotations
 
 import numpy as np
 
-from color_detect import crop, question_region, split_answer_regions
+from color_detect import crop, find_tiles, question_region
 from ocr_engine import OCREngine
 
 
@@ -18,11 +14,11 @@ LANG_HINTS = {
     "de": [" und ", " nicht ", " welche ", " ist ", "ä", "ö", "ü", "ß"],
     "fr": [" est ", " quel ", " quelle ", " pour ", " avec ", " à"],
     "es": [" qué ", " cuál ", " es ", " para ", "ñ"],
-    "en": [" the ", " is ", " what ", " which ", " who ", " how "],
+    "en": [" the ", " is ", " what ", " which ", " who ", " how ", " use ", " talk "],
 }
 
 
-def detect_language(text: str) -> str:
+def detect_language(text):
     if not text:
         return "unknown"
     t = f" {text.lower()} "
@@ -31,20 +27,20 @@ def detect_language(text: str) -> str:
     return best if scores[best] > 0 else "unknown"
 
 
-def build_payload(frame: np.ndarray, ocr: OCREngine) -> dict:
-    """Run OCR on every region and assemble the spec-compliant JSON payload."""
-    qbox = question_region(frame)
+def build_payload(frame, ocr):
+    tiles = find_tiles(frame)
+    qbox = question_region(frame, tiles)
     q_img = crop(frame, qbox)
     q_blocks = ocr.read(q_img)
     question_text = ocr.join_text(q_blocks)
 
-    elements: list[dict] = []
-    options: dict = {}
+    elements = []
+    options = {"red": "", "blue": "", "yellow": "", "green": ""}
 
     for block in q_blocks:
         elements.append({"type": "text", "value": block["text"], "color": "white"})
 
-    for color, box in split_answer_regions(frame).items():
+    for color, box in tiles.items():
         sub = crop(frame, box)
         blocks = ocr.read(sub)
         text = ocr.join_text(blocks)

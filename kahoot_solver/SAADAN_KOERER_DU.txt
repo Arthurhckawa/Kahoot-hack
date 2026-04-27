@@ -1,0 +1,41 @@
+============================================
+KAHOOT SOLVER - SAADAN KOERER DU DEN
+============================================
+
+NEMMESTE METODE:
+  Dobbeltklik paa START.bat
+  Det aabner CMD og koerer alt automatisk.
+
+MANUEL METODE (hvis du foretrekker CMD):
+  1. Aabn CMD i mappen Kahoot-hack\kahoot_solver
+     (skriv 'cmd' i adresselinjen i File Explorer)
+  2. Koer disse to kommandoer:
+       .venv\Scripts\activate
+       python main.py
+  3. Stop med Ctrl+C
+
+OPDATER FRA GITHUB:
+  cd %USERPROFILE%\Desktop\Kahoot-hack
+  git pull
+
+NAAR DEN KOERER:
+  - Et lille moerkt overlay-vindue dukker op oeverst til venstre
+  - Loading bar fyldes for hver fase (PyTorch, OCR, Claude)
+  - Naar den er groen og siger READY = klar
+  - Aabn Kahoot - svaret kommer indenfor 3-5 sek
+
+PROBLEMER:
+  Overlay viser fejl?
+    - Tjek .env har den rigtige EMERGENT_LLM_KEY
+    - Kun ET 'sk-emergent-' praefiks (ikke to)
+  Den finder ikke Kahoot?
+    - Kahoot skal vaere i fullscreen browser
+    - CMD-vinduet maa ikke daekke Kahoot-kortet
+  Tom balance?
+    - Gaa til Emergent profil -> Universal Key -> Add Balance
+
+MODELLER (i .env):
+  claude-haiku-4-5-20251001  (default - hurtig, billig)
+  claude-sonnet-4-5-20250929 (langsommere, smartere)
+
+============================================
